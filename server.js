@@ -19,7 +19,7 @@ app.get('/ping', (req, res) => {
   res.send('pong');
 });
 
-// Dual-channel room sync API
+// Dual-channel room sync API (HTTP Polling fallback)
 app.get('/api/room/:code', (req, res) => {
   const code = sanitizeRoomCode(req.params.code);
   const room = rooms.get(code);
@@ -33,6 +33,58 @@ app.get('/api/room/:code', (req, res) => {
     timestamp: Date.now()
   });
 });
+
+// Real-Time Server-Sent Events (SSE) Stream for 24/7 background widget sync
+const sseClients = new Map(); // roomCode -> Set of res
+
+app.get('/api/room/:code/live', (req, res) => {
+  const code = sanitizeRoomCode(req.params.code);
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.flushHeaders();
+
+  if (!sseClients.has(code)) {
+    sseClients.set(code, new Set());
+  }
+  const set = sseClients.get(code);
+  set.add(res);
+
+  // Send current room strokes immediately on connect
+  const room = rooms.get(code);
+  const initialData = JSON.stringify({ strokes: room ? room.strokes : [], userCount: room ? room.users.size : 1 });
+  res.write(`data: ${initialData}\n\n`);
+
+  // Heartbeat ping every 20s to keep connection open through cloud proxies
+  const pingInterval = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch (e) {}
+  }, 20000);
+
+  req.on('close', () => {
+    clearInterval(pingInterval);
+    set.delete(res);
+    if (set.size === 0) sseClients.delete(code);
+  });
+});
+
+function broadcastRoomToSSE(roomCode) {
+  if (!roomCode) return;
+  const set = sseClients.get(roomCode);
+  if (!set || set.size === 0) return;
+  const room = rooms.get(roomCode);
+  const payload = JSON.stringify({ strokes: room ? room.strokes : [], userCount: room ? room.users.size : 1 });
+  const msg = `data: ${payload}\n\n`;
+  for (const clientRes of set) {
+    try {
+      clientRes.write(msg);
+    } catch (err) {
+      set.delete(clientRes);
+    }
+  }
+}
 
 // Serve static frontend assets
 app.use(express.static(path.join(__dirname, 'public')));
@@ -181,7 +233,10 @@ io.on('connection', (socket) => {
 
     // Broadcast to everyone else in the room
     socket.to(currentRoom).emit('stroke-start', fullStroke);
+    broadcastRoomToSSE(currentRoom);
   });
+
+  let lastSseBroadcastTime = 0;
 
   // Stroke point appending (streaming live as drawing happens)
   socket.on('stroke-point', (data) => {
@@ -196,6 +251,12 @@ io.on('connection', (socket) => {
     }
 
     socket.to(currentRoom).emit('stroke-point', data);
+
+    const now = Date.now();
+    if (now - lastSseBroadcastTime > 150) {
+      lastSseBroadcastTime = now;
+      broadcastRoomToSSE(currentRoom);
+    }
   });
 
   // Stroke completed
@@ -220,6 +281,7 @@ io.on('connection', (socket) => {
       data.fullStroke.fadeDuration = 999999999;
     }
     socket.to(currentRoom).emit('stroke-end', data);
+    broadcastRoomToSSE(currentRoom);
   });
 
   // Live remote cursor tracking
@@ -242,6 +304,7 @@ io.on('connection', (socket) => {
       room.strokes = [];
     }
     io.to(currentRoom).emit('canvas-cleared', { byUser: currentUser?.name });
+    broadcastRoomToSSE(currentRoom);
   });
 
   // Disconnect handler

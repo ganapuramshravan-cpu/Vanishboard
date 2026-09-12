@@ -430,8 +430,13 @@
     currentUser = data.user;
     timeOffset = data.serverTime - Date.now();
     localStorage.setItem('vb_last_room', currentRoom);
-    if (window.AndroidBridge && typeof window.AndroidBridge.updateRoomInfo === 'function') {
-      window.AndroidBridge.updateRoomInfo(currentRoom, data.users.length);
+    if (window.AndroidBridge) {
+      if (typeof window.AndroidBridge.updateRoomInfo === 'function') {
+        window.AndroidBridge.updateRoomInfo(currentRoom, data.users.length);
+      }
+      if (typeof window.AndroidBridge.setServerUrl === 'function') {
+        window.AndroidBridge.setServerUrl(activeServerUrl);
+      }
     }
 
     currentRoomCodeEl.textContent = currentRoom;
@@ -851,13 +856,13 @@
   let hasActiveStrokesLastCheck = false;
 
   function syncWidgetCanvas(force = false) {
-    if (!window.AndroidBridge || typeof window.AndroidBridge.updateWidgetPreview !== 'function') {
+    if (!window.AndroidBridge) {
       return;
     }
 
     const now = Date.now();
-    // Force updates execute immediately (0ms delay); continuous strokes throttled to 120ms
-    if (!force && now - lastWidgetSyncTime < 120) {
+    // Force updates execute immediately (0ms delay); continuous strokes throttled to 80ms
+    if (!force && now - lastWidgetSyncTime < 80) {
       return;
     }
     lastWidgetSyncTime = now;
@@ -868,12 +873,29 @@
     if (allStrokes.length === 0) {
       if (hasActiveStrokesLastCheck) {
         hasActiveStrokesLastCheck = false;
-        window.AndroidBridge.updateWidgetPreview('');
+        if (typeof window.AndroidBridge.updateWidgetPreview === 'function') {
+          window.AndroidBridge.updateWidgetPreview('');
+        }
+        if (typeof window.AndroidBridge.updateWidgetStrokes === 'function') {
+          window.AndroidBridge.updateWidgetStrokes('[]');
+        }
       }
       return;
     }
 
     hasActiveStrokesLastCheck = true;
+
+    // 1. Instant Native Android Canvas Rendering (Ultra fast, sub-millisecond, zero Base64 overhead)
+    if (typeof window.AndroidBridge.updateWidgetStrokes === 'function') {
+      try {
+        window.AndroidBridge.updateWidgetStrokes(JSON.stringify(allStrokes));
+      } catch (err) {
+        console.warn('[NativeWidgetSync] Error:', err);
+      }
+    }
+
+    // 2. HTML5 Canvas Fallback Rendering
+    if (typeof window.AndroidBridge.updateWidgetPreview === 'function') {
     try {
       widgetCtx.clearRect(0, 0, WIDGET_SIZE, WIDGET_SIZE);
 
@@ -1048,10 +1070,11 @@
         widgetCtx.restore();
       }
 
-      const dataUrl = widgetOffscreenCanvas.toDataURL('image/png');
-      window.AndroidBridge.updateWidgetPreview(dataUrl);
-    } catch (err) {
-      console.warn('[WidgetSync] Error:', err);
+        const dataUrl = widgetOffscreenCanvas.toDataURL('image/png');
+        window.AndroidBridge.updateWidgetPreview(dataUrl);
+      } catch (err) {
+        console.warn('[WidgetSync] Error:', err);
+      }
     }
   }
 
@@ -1062,36 +1085,38 @@
     }
   }, 1000);
 
-  // Dual-channel background sync: Poll server for remote updates every 2 seconds
+  // Dual-channel background sync: Poll server for remote updates every 1 second
   setInterval(async () => {
     if (!currentRoom || !activeServerUrl) return;
     try {
       const res = await fetch(`${activeServerUrl}/api/room/${encodeURIComponent(currentRoom)}`);
       if (!res.ok) return;
       const data = await res.json();
-      if (Array.isArray(data.strokes) && data.strokes.length > 0) {
-        let hasNew = false;
-        const existingIds = new Set(completedStrokes.map(s => s.id));
-        for (let i = 0; i < data.strokes.length; i++) {
-          const remoteS = data.strokes[i];
-          if (!existingIds.has(remoteS.id) && !remoteActiveStrokes.has(remoteS.id)) {
-            completedStrokes.push({
-              ...remoteS,
-              color: remoteS.color || '#18181b',
-              fadeDuration: 999999999,
-              endedAt: remoteS.endedAt || Date.now()
-            });
-            hasNew = true;
-          }
-        }
-        if (hasNew) {
+      if (Array.isArray(data.strokes)) {
+        if (data.strokes.length === 0 && completedStrokes.length > 0) {
+          completedStrokes = [];
+          remoteActiveStrokes.clear();
           syncWidgetCanvas(true);
+        } else if (data.strokes.length > 0) {
+          const remoteLen = data.strokes.length;
+          const localLen = completedStrokes.length;
+          const remotePtCount = data.strokes.reduce((acc, s) => acc + (s.points ? s.points.length : 1), 0);
+          const localPtCount = completedStrokes.reduce((acc, s) => acc + (s.points ? s.points.length : 1), 0);
+
+          if (remoteLen !== localLen || remotePtCount !== localPtCount) {
+            completedStrokes = data.strokes.map(s => ({
+              ...s,
+              fadeDuration: 999999999,
+              endedAt: s.endedAt || Date.now()
+            }));
+            syncWidgetCanvas(true);
+          }
         }
       }
     } catch (e) {
       // Network silent fallback
     }
-  }, 2000);
+  }, 1000);
 
   requestAnimationFrame(animationLoop);
 
