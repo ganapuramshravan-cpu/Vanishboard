@@ -19,6 +19,21 @@ app.get('/ping', (req, res) => {
   res.send('pong');
 });
 
+// Dual-channel room sync API
+app.get('/api/room/:code', (req, res) => {
+  const code = sanitizeRoomCode(req.params.code);
+  const room = rooms.get(code);
+  if (!room) {
+    return res.json({ roomCode: code, strokes: [], userCount: 0, timestamp: Date.now() });
+  }
+  res.json({
+    roomCode: code,
+    strokes: room.strokes,
+    userCount: room.users.size,
+    timestamp: Date.now()
+  });
+});
+
 // Serve static frontend assets
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -154,10 +169,11 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoom);
     if (!room) return;
 
-    // Attach verified server timestamp
+    // Attach verified server timestamp and permanent lifespan
     const fullStroke = {
       ...strokeData,
       userId: socket.id,
+      fadeDuration: 999999999,
       createdAt: strokeData.createdAt || Date.now()
     };
 
@@ -191,6 +207,7 @@ io.on('connection', (socket) => {
       const strokeObj = {
         ...data.fullStroke,
         userId: socket.id,
+        fadeDuration: 999999999,
         createdAt: data.fullStroke.createdAt || Date.now()
       };
       if (existingIndex !== -1) {
@@ -198,6 +215,9 @@ io.on('connection', (socket) => {
       } else {
         room.strokes.push(strokeObj);
       }
+    }
+    if (data && data.fullStroke) {
+      data.fullStroke.fadeDuration = 999999999;
     }
     socket.to(currentRoom).emit('stroke-end', data);
   });

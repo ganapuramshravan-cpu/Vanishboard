@@ -259,6 +259,27 @@ html, body {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+.btn-leave {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 5px;
+  background: rgba(239, 68, 68, 0.14) !important;
+  border: 1px solid rgba(239, 68, 68, 0.45) !important;
+  color: #fca5a5 !important;
+  font-weight: 600 !important;
+  padding: 5px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0 !important;
+}
+
+.btn-leave:hover {
+  background: rgba(239, 68, 68, 0.28) !important;
+  color: #fff !important;
+  border-color: rgba(239, 68, 68, 0.7) !important;
+}
+
 /* Ephemeral Lifespan Indicator */
 #lifespan-indicator {
   position: fixed;
@@ -1007,17 +1028,71 @@ input[type="text"]:focus {
 /* Responsive adjustments */
 @media (max-width: 640px) {
   #top-bar {
-    padding: 8px 14px;
-    min-width: 92vw;
+    width: calc(100% - 16px);
+    max-width: 96vw;
+    padding: 6px 8px;
+    gap: 6px;
+    min-width: 0;
   }
-  .brand-name { display: none; }
+  .brand {
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .brand-icon {
+    width: 24px;
+    height: 24px;
+  }
+  .brand-name {
+    display: none;
+  }
+  .room-pill {
+    padding: 2px 4px 2px 6px;
+    gap: 4px;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .room-label {
+    display: none;
+  }
+  .room-code {
+    font-size: 11px;
+  }
+  .top-actions {
+    gap: 5px;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+  .users-badge {
+    padding: 3px 6px;
+    font-size: 11px;
+    gap: 4px;
+  }
+  .btn-leave {
+    padding: 4px 8px !important;
+    font-size: 11px !important;
+    flex-shrink: 0 !important;
+  }
   #tool-dock {
-    bottom: 16px;
-    gap: 8px;
-    padding: 8px 12px;
+    bottom: 12px;
+    gap: 6px;
+    padding: 6px 10px;
+    max-width: 96vw;
   }
   input[type="range"] {
-    width: 50px;
+    width: 44px;
+  }
+}
+
+@media (max-width: 380px) {
+  .users-badge span:last-child {
+    display: none;
+  }
+  .leave-text {
+    display: none;
+  }
+  .btn-leave {
+    padding: 6px !important;
+    border-radius: 50% !important;
   }
 }
 

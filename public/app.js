@@ -110,9 +110,16 @@
 
   // Server URL Configuration (Supports Web & Android APK environments)
   const isWebProtocol = window.location.protocol.startsWith('http');
-  const PUBLIC_URL = 'https://ago-equity-committee-sagem.trycloudflare.com';
+  const CLOUD_URL = 'https://vanishboard.onrender.com';
+  const PUBLIC_URL = CLOUD_URL;
   const DEFAULT_SERVER = isWebProtocol ? window.location.origin : PUBLIC_URL;
-  let activeServerUrl = localStorage.getItem('vb_server_url') || DEFAULT_SERVER;
+  let savedUrl = localStorage.getItem('vb_server_url');
+  // Auto-upgrade from temporary trycloudflare URL to permanent 24/7 Render Cloud URL
+  if (savedUrl && savedUrl.includes('trycloudflare.com')) {
+    savedUrl = CLOUD_URL;
+    localStorage.setItem('vb_server_url', CLOUD_URL);
+  }
+  let activeServerUrl = savedUrl || DEFAULT_SERVER;
 
   // Socket.IO Setup with reliable fallback transports
   let socket = io(activeServerUrl, {
@@ -325,6 +332,7 @@
     remoteActiveStrokes.clear();
     remoteCursors.forEach(el => el.remove());
     remoteCursors.clear();
+    localStorage.removeItem('vb_last_room');
 
     // Clean URL query
     try {
@@ -339,12 +347,30 @@
       joinRoomBtn.textContent = 'Join';
     }
 
-    // Toggle UI
+    // Dismiss any open popovers
+    if (penColorsPopover) penColorsPopover.classList.add('hidden');
+    if (boardColorsPopover) boardColorsPopover.classList.add('hidden');
+    if (doodlesPopover) doodlesPopover.classList.add('hidden');
+    if (textInputOverlay) textInputOverlay.classList.add('hidden');
+
+    // Toggle UI: show room modal, hide toolbar
     topBar.classList.add('hidden');
     toolDock.classList.add('hidden');
     roomModal.classList.remove('hidden');
 
+    if (currentRoomCodeEl) currentRoomCodeEl.textContent = '------';
+    if (roomCodeInput) roomCodeInput.value = '';
+
     socket.emit('join-room', { roomCode: '' }); // Leave room on server
+
+    // Reset widget badge & preview
+    if (window.AndroidBridge && typeof window.AndroidBridge.updateRoomInfo === 'function') {
+      window.AndroidBridge.updateRoomInfo('', 1);
+    }
+    syncWidgetCanvas(true);
+
+    playClearWhoosh();
+    showToast('Left board. Join or create a new room!');
   }
 
   // Socket Event Handlers
@@ -373,6 +399,9 @@
         endedAt: s.endedAt || s.createdAt
       }));
     }
+
+    // Immediately sync loaded room content to home screen widget
+    syncWidgetCanvas(true);
 
     // Reveal UI
     roomModal.classList.add('hidden');
@@ -403,7 +432,7 @@
 
   function updateUserCount(count) {
     if (count <= 1) {
-      userCountEl.textContent = '1 Online (You)';
+      userCountEl.textContent = '1 Online';
     } else {
       userCountEl.textContent = `${count} Online`;
     }
@@ -415,11 +444,15 @@
   // Remote Drawing Events
   socket.on('stroke-start', (strokeData) => {
     if (!strokeData || !strokeData.id) return;
-    remoteActiveStrokes.set(strokeData.id, {
+    const s = {
       ...strokeData,
+      color: strokeData.color || '#18181b',
+      fadeDuration: 999999999,
       localReceivedAt: Date.now(),
       endedAt: null
-    });
+    };
+    remoteActiveStrokes.set(strokeData.id, s);
+    syncWidgetCanvas(false);
   });
 
   socket.on('stroke-point', (data) => {
@@ -430,10 +463,10 @@
       stroke = {
         id: data.strokeId,
         points: [],
-        color: '#00f5d4',
-        width: 6,
+        color: '#18181b',
+        width: 3,
         mode: 'pen',
-        fadeDuration: 8,
+        fadeDuration: 999999999,
         localReceivedAt: Date.now(),
         endedAt: null
       };
@@ -441,6 +474,7 @@
     }
     if (data.point) {
       stroke.points.push(data.point);
+      syncWidgetCanvas(false);
     }
   });
 
@@ -450,12 +484,16 @@
     if (data.fullStroke) {
       stroke = {
         ...data.fullStroke,
+        color: data.fullStroke.color || '#18181b',
+        fadeDuration: 999999999,
         endedAt: Date.now()
       };
     } else if (stroke) {
       stroke.endedAt = Date.now();
+      stroke.fadeDuration = 999999999;
     }
     if (stroke) {
+      stroke.fadeDuration = 999999999;
       completedStrokes.push(stroke);
       remoteActiveStrokes.delete(data.strokeId);
       syncWidgetCanvas(true);
@@ -757,8 +795,8 @@
     requestAnimationFrame(animationLoop);
   }
 
-  // Android Home Screen Widget Synchronizer
-  const WIDGET_SIZE = 512;
+  // Android Home Screen Widget Synchronizer (Ultra-fast sub-second rendering)
+  const WIDGET_SIZE = 384;
   const widgetOffscreenCanvas = document.createElement('canvas');
   widgetOffscreenCanvas.width = WIDGET_SIZE;
   widgetOffscreenCanvas.height = WIDGET_SIZE;
@@ -772,7 +810,8 @@
     }
 
     const now = Date.now();
-    if (!force && now - lastWidgetSyncTime < 500) {
+    // Force updates execute immediately (0ms delay); continuous strokes throttled to 120ms
+    if (!force && now - lastWidgetSyncTime < 120) {
       return;
     }
     lastWidgetSyncTime = now;
@@ -848,16 +887,19 @@
       const midX = (minX + maxX) / 2;
       const midY = (minY + maxY) / 2;
 
+      const cw = canvasWidth || window.innerWidth || 360;
+      const ch = canvasHeight || window.innerHeight || 640;
+
       // Uniform aspect ratio scaling: ensures circles never stretch into ellipses
-      const contentPxW = spanX * canvasWidth;
-      const contentPxH = spanY * canvasHeight;
+      const contentPxW = spanX * cw;
+      const contentPxH = spanY * ch;
       const S = Math.min((paperWidth * 0.88) / contentPxW, (paperHeight * 0.88) / contentPxH);
 
       // Center the content right onto the paper area
       const paperCenterX = paperLeft + paperWidth / 2;
       const paperCenterY = paperTop + paperHeight / 2;
-      const offsetX = paperCenterX - (midX * canvasWidth) * S;
-      const offsetY = paperCenterY - (midY * canvasHeight) * S;
+      const offsetX = paperCenterX - (midX * cw) * S;
+      const offsetY = paperCenterY - (midY * ch) * S;
 
       // Draw each stroke or text note directly onto the sticky note with crisp lines
       for (let sIdx = 0; sIdx < allStrokes.length; sIdx++) {
@@ -876,8 +918,8 @@
           widgetCtx.font = `bold ${scaledFontSize}px Outfit, -apple-system, sans-serif`;
           widgetCtx.fillStyle = s.color || '#18181b';
           widgetCtx.textBaseline = 'top';
-          const px = (s.x * canvasWidth) * S + offsetX;
-          const py = (s.y * canvasHeight) * S + offsetY;
+          const px = (s.x * cw) * S + offsetX;
+          const py = (s.y * ch) * S + offsetY;
           const lines = s.text.split('\n');
           const lineHeight = scaledFontSize * 1.28;
           lines.forEach((line, idx) => {
@@ -896,8 +938,8 @@
           widgetCtx.font = `${widgetDoodleSize}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
           widgetCtx.textAlign = 'center';
           widgetCtx.textBaseline = 'middle';
-          const px = (s.x * canvasWidth) * S + offsetX;
-          const py = (s.y * canvasHeight) * S + offsetY;
+          const px = (s.x * cw) * S + offsetX;
+          const py = (s.y * ch) * S + offsetY;
           widgetCtx.fillText(s.icon, px, py);
           widgetCtx.restore();
           continue;
@@ -905,17 +947,8 @@
 
         if (!s.points || s.points.length === 0) continue;
 
-        const end = s.endedAt || s.localReceivedAt || s.createdAt || now;
-        const elapsed = (now - end) / 1000;
-        const progress = Math.min(1.0, elapsed / (s.fadeDuration || 8));
-        let opacity = 1.0;
-        if (progress > 0.35) {
-          opacity = Math.max(0, 1.0 - (progress - 0.35) / 0.65);
-        }
-        if (opacity <= 0) continue;
-
         widgetCtx.save();
-        widgetCtx.globalAlpha = opacity;
+        widgetCtx.globalAlpha = 1.0;
         widgetCtx.lineCap = 'round';
         widgetCtx.lineJoin = 'round';
         // Bold, clear handwriting line width
@@ -937,22 +970,22 @@
 
         const pts = s.points;
         if (pts.length === 1) {
-          const px = (pts[0].x * canvasWidth) * S + offsetX;
-          const py = (pts[0].y * canvasHeight) * S + offsetY;
+          const px = (pts[0].x * cw) * S + offsetX;
+          const py = (pts[0].y * ch) * S + offsetY;
           widgetCtx.beginPath();
           widgetCtx.arc(px, py, widgetCtx.lineWidth / 2, 0, Math.PI * 2);
           widgetCtx.fill();
         } else {
           widgetCtx.beginPath();
-          const p0x = (pts[0].x * canvasWidth) * S + offsetX;
-          const p0y = (pts[0].y * canvasHeight) * S + offsetY;
+          const p0x = (pts[0].x * cw) * S + offsetX;
+          const p0y = (pts[0].y * ch) * S + offsetY;
           widgetCtx.moveTo(p0x, p0y);
 
           for (let i = 1; i < pts.length - 1; i++) {
-            const p1x = (pts[i].x * canvasWidth) * S + offsetX;
-            const p1y = (pts[i].y * canvasHeight) * S + offsetY;
-            const p2x = (pts[i + 1].x * canvasWidth) * S + offsetX;
-            const p2y = (pts[i + 1].y * canvasHeight) * S + offsetY;
+            const p1x = (pts[i].x * cw) * S + offsetX;
+            const p1y = (pts[i].y * ch) * S + offsetY;
+            const p2x = (pts[i + 1].x * cw) * S + offsetX;
+            const p2y = (pts[i + 1].y * ch) * S + offsetY;
             const xc = (p1x + p2x) / 2;
             const yc = (p1y + p2y) / 2;
             widgetCtx.quadraticCurveTo(p1x, p1y, xc, yc);
@@ -960,8 +993,8 @@
 
           const last = pts[pts.length - 1];
           widgetCtx.lineTo(
-            (last.x * canvasWidth) * S + offsetX,
-            (last.y * canvasHeight) * S + offsetY
+            (last.x * cw) * S + offsetX,
+            (last.y * ch) * S + offsetY
           );
           widgetCtx.stroke();
         }
@@ -975,6 +1008,44 @@
       console.warn('[WidgetSync] Error:', err);
     }
   }
+
+  // Periodic background sync: ensures widget stays updated within seconds even when app is in background
+  setInterval(() => {
+    if (window.AndroidBridge && (completedStrokes.length > 0 || remoteActiveStrokes.size > 0 || hasActiveStrokesLastCheck)) {
+      syncWidgetCanvas(false);
+    }
+  }, 1000);
+
+  // Dual-channel background sync: Poll server for remote updates every 2 seconds
+  setInterval(async () => {
+    if (!currentRoom || !activeServerUrl) return;
+    try {
+      const res = await fetch(`${activeServerUrl}/api/room/${encodeURIComponent(currentRoom)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.strokes) && data.strokes.length > 0) {
+        let hasNew = false;
+        const existingIds = new Set(completedStrokes.map(s => s.id));
+        for (let i = 0; i < data.strokes.length; i++) {
+          const remoteS = data.strokes[i];
+          if (!existingIds.has(remoteS.id) && !remoteActiveStrokes.has(remoteS.id)) {
+            completedStrokes.push({
+              ...remoteS,
+              color: remoteS.color || '#18181b',
+              fadeDuration: 999999999,
+              endedAt: remoteS.endedAt || Date.now()
+            });
+            hasNew = true;
+          }
+        }
+        if (hasNew) {
+          syncWidgetCanvas(true);
+        }
+      }
+    } catch (e) {
+      // Network silent fallback
+    }
+  }, 2000);
 
   requestAnimationFrame(animationLoop);
 
@@ -1195,11 +1266,13 @@
   });
 
   // Leave Room Button
-  leaveRoomBtn.addEventListener('click', () => {
-    if (confirm('Leave current room?')) {
+  if (leaveRoomBtn) {
+    leaveRoomBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
       leaveRoom();
-    }
-  });
+    });
+  }
 
   // Modal Actions
   createRoomBtn.addEventListener('click', () => {
