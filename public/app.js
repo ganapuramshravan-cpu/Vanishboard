@@ -22,6 +22,11 @@
   const joinRoomForm = document.getElementById('join-room-form');
   const connectionStatusPill = document.getElementById('connection-status-pill');
   const connectionStatusText = document.getElementById('connection-status-text');
+  const roomModalTitle = document.getElementById('room-modal-title');
+  const roomModalSubtitle = document.getElementById('room-modal-subtitle');
+  const changeRoomActions = document.getElementById('change-room-actions');
+  const cancelChangeRoomBtn = document.getElementById('cancel-change-room-btn');
+  const leaveRoomConfirmBtn = document.getElementById('leave-room-confirm-btn');
 
   // Tool Dock Inputs
   const toolBtns = document.querySelectorAll('.tool-btn[data-tool]');
@@ -326,6 +331,49 @@
     } catch (e) {}
   }
 
+  function resetModalHeader() {
+    if (roomModalTitle) roomModalTitle.innerHTML = 'Vanish<span>Board</span>';
+    if (roomModalSubtitle) roomModalSubtitle.textContent = 'Shared real-time canvas with temporary, disappearing ink.';
+    if (changeRoomActions) changeRoomActions.classList.add('hidden');
+    if (joinRoomBtn) {
+      joinRoomBtn.disabled = false;
+      joinRoomBtn.textContent = 'Join';
+    }
+  }
+
+  function openRoomSwitchModal() {
+    // Dismiss any open popovers
+    if (penColorsPopover) penColorsPopover.classList.add('hidden');
+    if (boardColorsPopover) boardColorsPopover.classList.add('hidden');
+    if (doodlesPopover) doodlesPopover.classList.add('hidden');
+    if (textInputOverlay) textInputOverlay.classList.add('hidden');
+
+    if (currentRoom) {
+      if (roomModalTitle) roomModalTitle.innerHTML = 'Change <span>Room</span>';
+      if (roomModalSubtitle) {
+        roomModalSubtitle.innerHTML = `Current Room: <strong style="color:var(--accent-cyan); letter-spacing:1px;">${currentRoom}</strong>. Enter a new code or create a new board:`;
+      }
+      if (changeRoomActions) changeRoomActions.classList.remove('hidden');
+      if (joinRoomBtn) {
+        joinRoomBtn.disabled = false;
+        joinRoomBtn.textContent = 'Switch Room';
+      }
+    } else {
+      resetModalHeader();
+    }
+
+    if (roomCodeInput) {
+      roomCodeInput.value = '';
+      setTimeout(() => {
+        try {
+          roomCodeInput.focus();
+        } catch (e) {}
+      }, 120);
+    }
+
+    roomModal.classList.remove('hidden');
+  }
+
   function leaveRoom() {
     currentRoom = null;
     completedStrokes = [];
@@ -341,17 +389,7 @@
       window.history.pushState({}, '', url);
     } catch (e) {}
 
-    // Reset join button
-    if (joinRoomBtn) {
-      joinRoomBtn.disabled = false;
-      joinRoomBtn.textContent = 'Join';
-    }
-
-    // Dismiss any open popovers
-    if (penColorsPopover) penColorsPopover.classList.add('hidden');
-    if (boardColorsPopover) boardColorsPopover.classList.add('hidden');
-    if (doodlesPopover) doodlesPopover.classList.add('hidden');
-    if (textInputOverlay) textInputOverlay.classList.add('hidden');
+    resetModalHeader();
 
     // Toggle UI: show room modal, hide toolbar
     topBar.classList.add('hidden');
@@ -359,7 +397,14 @@
     roomModal.classList.remove('hidden');
 
     if (currentRoomCodeEl) currentRoomCodeEl.textContent = '------';
-    if (roomCodeInput) roomCodeInput.value = '';
+    if (roomCodeInput) {
+      roomCodeInput.value = '';
+      setTimeout(() => {
+        try {
+          roomCodeInput.focus();
+        } catch (e) {}
+      }, 120);
+    }
 
     socket.emit('join-room', { roomCode: '' }); // Leave room on server
 
@@ -404,6 +449,7 @@
     syncWidgetCanvas(true);
 
     // Reveal UI
+    resetModalHeader();
     roomModal.classList.add('hidden');
     topBar.classList.remove('hidden');
     toolDock.classList.remove('hidden');
@@ -1265,11 +1311,32 @@
     }
   });
 
-  // Leave Room Button
+  // Leave / Change Room Button
   if (leaveRoomBtn) {
     leaveRoomBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      openRoomSwitchModal();
+    });
+  }
+
+  // Cancel Change Room Button (Stay in current room)
+  if (cancelChangeRoomBtn) {
+    cancelChangeRoomBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (currentRoom) {
+        roomModal.classList.add('hidden');
+        resetModalHeader();
+      } else {
+        leaveRoom();
+      }
+    });
+  }
+
+  // Confirm Exit Board Button
+  if (leaveRoomConfirmBtn) {
+    leaveRoomConfirmBtn.addEventListener('click', (e) => {
+      e.preventDefault();
       leaveRoom();
     });
   }

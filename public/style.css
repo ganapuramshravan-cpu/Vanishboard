@@ -262,22 +262,33 @@ html, body {
 .btn-leave {
   display: inline-flex !important;
   align-items: center;
-  gap: 5px;
-  background: rgba(239, 68, 68, 0.14) !important;
+  justify-content: center;
+  width: 34px !important;
+  height: 34px !important;
+  padding: 0 !important;
+  background: rgba(239, 68, 68, 0.15) !important;
   border: 1px solid rgba(239, 68, 68, 0.45) !important;
   color: #fca5a5 !important;
-  font-weight: 600 !important;
-  padding: 5px 10px;
-  border-radius: 8px;
+  border-radius: 50% !important;
   cursor: pointer;
-  white-space: nowrap;
   flex-shrink: 0 !important;
+  transition: all 0.2s ease;
+}
+
+.btn-leave svg {
+  width: 17px !important;
+  height: 17px !important;
 }
 
 .btn-leave:hover {
-  background: rgba(239, 68, 68, 0.28) !important;
+  background: rgba(239, 68, 68, 0.3) !important;
   color: #fff !important;
-  border-color: rgba(239, 68, 68, 0.7) !important;
+  border-color: rgba(239, 68, 68, 0.75) !important;
+  transform: scale(1.05);
+}
+
+.btn-leave:active {
+  transform: scale(0.95);
 }
 
 /* Ephemeral Lifespan Indicator */
@@ -1068,8 +1079,10 @@ input[type="text"]:focus {
     gap: 4px;
   }
   .btn-leave {
-    padding: 4px 8px !important;
-    font-size: 11px !important;
+    width: 32px !important;
+    height: 32px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
     flex-shrink: 0 !important;
   }
   #tool-dock {
@@ -1087,11 +1100,10 @@ input[type="text"]:focus {
   .users-badge span:last-child {
     display: none;
   }
-  .leave-text {
-    display: none;
-  }
   .btn-leave {
-    padding: 6px !important;
+    width: 30px !important;
+    height: 30px !important;
+    padding: 0 !important;
     border-radius: 50% !important;
   }
 }
