@@ -1,0 +1,22 @@
+{
+  "name": "ephemeral-canvas",
+  "version": "1.0.0",
+  "description": "Shared real-time drawing canvas with room codes and ephemeral fading ink",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "canvas",
+    "realtime",
+    "socketio",
+    "ephemeral"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.3"
+  }
+}
