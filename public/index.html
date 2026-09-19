@@ -4,6 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>VanishBoard • Ephemeral Real-Time Drawing</title>
+  <meta name="theme-color" content="#fef08a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="VanishBoard">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.json">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -355,12 +361,16 @@
 
       <div class="modal-body">
         <div class="input-group">
-          <label for="settings-server-url">Active Server URL (24/7 Cloud or Local)</label>
-          <input type="text" id="settings-server-url" placeholder="https://vanishboard.onrender.com" spellcheck="false" autocomplete="off">
+          <label for="settings-server-url">Active Server URL (Vercel / Cloud / Local)</label>
+          <input type="text" id="settings-server-url" placeholder="https://vanishboard.vercel.app" spellcheck="false" autocomplete="off">
         </div>
         <div style="font-size: 0.82rem; color: #a1a1aa; line-height: 1.45; margin-top: 6px; background: rgba(255,255,255,0.04); padding: 10px; border-radius: 8px;">
-          🌐 <b>24/7 Cloud Server:</b><br>
-          Paste your 24/7 Cloud URL (Render or Glitch) here so the app works even when your laptop is turned off!
+          ⚡ <b>100% Free 24/7 Vercel Cloud:</b><br>
+          Paste your free Vercel deployment URL (e.g. <code>https://your-project.vercel.app</code>) here. Works 24/7 without cold-starts or sleeping!
+        </div>
+        <div style="font-size: 0.82rem; color: #fde047; line-height: 1.45; margin-top: 10px; background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.2); padding: 10px; border-radius: 8px;">
+          📲 <b>iPhone / iPad (iOS) Installation:</b><br>
+          Open Safari on your iPhone, tap <b>Share (📤)</b> and choose <b>"Add to Home Screen" (+)</b> to install VanishBoard as a native full-screen app!
         </div>
         <div style="display: flex; gap: 8px; margin-top: 14px;">
           <button type="button" id="btn-save-settings" class="btn-primary" style="flex: 1;">Save & Reconnect</button>

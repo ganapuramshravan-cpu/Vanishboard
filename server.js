@@ -11,18 +11,67 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
+// Global CORS and JSON body parser for Vercel and cross-origin mobile clients
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+app.use(express.json({ limit: '10mb' }));
+
+// Vercel KV / Upstash Redis support for 100% free serverless global state
+async function saveRoomToKV(code, strokes) {
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return;
+  try {
+    await fetch(`${url}/set/room:${code}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(strokes)
+    });
+  } catch (e) {}
+}
+
+async function getRoomFromKV(code) {
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  try {
+    const res = await fetch(`${url}/get/room:${code}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+    if (data && data.result) {
+      return typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+    }
+  } catch (e) {}
+  return null;
+}
+
 // Health check endpoint for cloud uptime monitoring & pinging
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), timestamp: Date.now() });
+  res.json({ status: 'ok', platform: process.env.VERCEL ? 'vercel' : 'node', uptime: process.uptime(), timestamp: Date.now() });
 });
 app.get('/ping', (req, res) => {
   res.send('pong');
 });
 
-// Dual-channel room sync API (HTTP Polling fallback)
-app.get('/api/room/:code', (req, res) => {
+// Dual-channel room sync API (HTTP Polling fallback & Vercel serverless support)
+app.get('/api/room/:code', async (req, res) => {
   const code = sanitizeRoomCode(req.params.code);
-  const room = rooms.get(code);
+  let room = rooms.get(code);
+  if (!room || room.strokes.length === 0) {
+    const kvStrokes = await getRoomFromKV(code);
+    if (kvStrokes && Array.isArray(kvStrokes) && kvStrokes.length > 0) {
+      if (!room) room = getOrCreateRoom(code).room;
+      room.strokes = kvStrokes;
+    }
+  }
   if (!room) {
     return res.json({ roomCode: code, strokes: [], userCount: 0, timestamp: Date.now() });
   }
@@ -32,6 +81,37 @@ app.get('/api/room/:code', (req, res) => {
     userCount: room.users.size,
     timestamp: Date.now()
   });
+});
+
+// HTTP REST stroke ingestion (100% reliable on Vercel Serverless)
+app.post('/api/room/:code/stroke', (req, res) => {
+  const code = sanitizeRoomCode(req.params.code);
+  const stroke = req.body;
+  if (!code || !stroke || !stroke.id) {
+    return res.status(400).json({ error: 'Invalid stroke data' });
+  }
+  const { room } = getOrCreateRoom(code);
+  const existingIdx = room.strokes.findIndex(s => s.id === stroke.id);
+  if (existingIdx >= 0) {
+    room.strokes[existingIdx] = stroke;
+  } else {
+    room.strokes.push(stroke);
+  }
+  saveRoomToKV(code, room.strokes);
+  io.to(code).emit('stroke-end', { strokeId: stroke.id, fullStroke: stroke });
+  broadcastRoomToSSE(code);
+  res.json({ success: true, strokeCount: room.strokes.length });
+});
+
+// HTTP REST clear canvas
+app.post('/api/room/:code/clear', (req, res) => {
+  const code = sanitizeRoomCode(req.params.code);
+  const { room } = getOrCreateRoom(code);
+  room.strokes = [];
+  saveRoomToKV(code, []);
+  io.to(code).emit('canvas-cleared', { byUser: req.body?.byUser || 'User' });
+  broadcastRoomToSSE(code);
+  res.json({ success: true, cleared: true });
 });
 
 // Real-Time Server-Sent Events (SSE) Stream for 24/7 background widget sync
@@ -324,6 +404,12 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`VanishBoard real-time canvas server running at http://localhost:${PORT}`);
-});
+if (!process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log(`VanishBoard real-time canvas server running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = server;
+module.exports.app = app;
+

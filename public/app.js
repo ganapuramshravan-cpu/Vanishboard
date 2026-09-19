@@ -126,11 +126,11 @@
   }
   let activeServerUrl = savedUrl || DEFAULT_SERVER;
 
-  // Socket.IO Setup with reliable fallback transports
+  // Socket.IO Setup with reliable fallback transports (WebSockets prioritized for Vercel)
   let socket = io(activeServerUrl, {
-    transports: ['polling', 'websocket'],
+    transports: ['websocket', 'polling'],
     reconnection: true,
-    reconnectionAttempts: 25,
+    reconnectionAttempts: Infinity,
     reconnectionDelay: 1000
   });
   let currentRoom = null;
@@ -229,6 +229,15 @@
       strokeId: doodleStroke.id,
       fullStroke: doodleStroke
     });
+    if (activeServerUrl && currentRoom) {
+      try {
+        fetch(`${activeServerUrl}/api/room/${encodeURIComponent(currentRoom)}/stroke`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(doodleStroke)
+        }).catch(() => {});
+      } catch (e) {}
+    }
     syncWidgetCanvas(true);
     playTone(660, 'sine', 0.08, 0.04);
   }
@@ -688,6 +697,17 @@
       strokeId: currentStroke.id,
       fullStroke: currentStroke
     });
+
+    if (activeServerUrl && currentRoom) {
+      try {
+        fetch(`${activeServerUrl}/api/room/${encodeURIComponent(currentRoom)}/stroke`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(currentStroke)
+        }).catch(() => {});
+      } catch (e) {}
+    }
+
     currentStroke = null;
     syncWidgetCanvas(true);
   }
@@ -1258,6 +1278,15 @@
       currentStroke = null;
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
       socket.emit('clear-canvas');
+      if (activeServerUrl && currentRoom) {
+        try {
+          fetch(`${activeServerUrl}/api/room/${encodeURIComponent(currentRoom)}/clear`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ byUser: currentUser?.name || 'User' })
+          }).catch(() => {});
+        } catch (e) {}
+      }
       syncWidgetCanvas(true);
       playClearWhoosh();
       showToast('Board wiped clean!');
@@ -1295,6 +1324,15 @@
         strokeId: textStroke.id,
         fullStroke: textStroke
       });
+      if (activeServerUrl && currentRoom) {
+        try {
+          fetch(`${activeServerUrl}/api/room/${encodeURIComponent(currentRoom)}/stroke`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(textStroke)
+          }).catch(() => {});
+        } catch (e) {}
+      }
       syncWidgetCanvas(true);
       playTone(600, 'sine', 0.08, 0.04);
       showToast('Note added to board');
