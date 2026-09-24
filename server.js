@@ -24,15 +24,16 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 
 // Vercel KV / Upstash Redis support for 100% free serverless global state
-async function saveRoomToKV(code, strokes) {
+async function saveRoomToKV(code, roomData) {
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return;
   try {
+    const payload = Array.isArray(roomData) ? { strokes: roomData, activePage: 1 } : roomData;
     await fetch(`${url}/set/room:${code}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
-      body: JSON.stringify(strokes)
+      body: JSON.stringify(payload)
     });
   } catch (e) {}
 }
@@ -47,7 +48,11 @@ async function getRoomFromKV(code) {
     });
     const data = await res.json();
     if (data && data.result) {
-      return typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+      const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+      if (Array.isArray(parsed)) {
+        return { strokes: parsed, activePage: 1 };
+      }
+      return parsed;
     }
   } catch (e) {}
   return null;
@@ -66,18 +71,20 @@ app.get('/api/room/:code', async (req, res) => {
   const code = sanitizeRoomCode(req.params.code);
   let room = rooms.get(code);
   if (!room || room.strokes.length === 0) {
-    const kvStrokes = await getRoomFromKV(code);
-    if (kvStrokes && Array.isArray(kvStrokes) && kvStrokes.length > 0) {
+    const kvData = await getRoomFromKV(code);
+    if (kvData) {
       if (!room) room = getOrCreateRoom(code).room;
-      room.strokes = kvStrokes;
+      if (Array.isArray(kvData.strokes)) room.strokes = kvData.strokes;
+      if (kvData.activePage) room.activePage = kvData.activePage;
     }
   }
   if (!room) {
-    return res.json({ roomCode: code, strokes: [], userCount: 0, timestamp: Date.now() });
+    return res.json({ roomCode: code, strokes: [], activePage: 1, userCount: 0, timestamp: Date.now() });
   }
   res.json({
     roomCode: code,
     strokes: room.strokes,
+    activePage: room.activePage || 1,
     userCount: room.users.size,
     timestamp: Date.now()
   });
@@ -91,27 +98,54 @@ app.post('/api/room/:code/stroke', (req, res) => {
     return res.status(400).json({ error: 'Invalid stroke data' });
   }
   const { room } = getOrCreateRoom(code);
+  if (!stroke.page) {
+    stroke.page = room.activePage || 1;
+  }
+  stroke.fadeDuration = 999999999;
+  stroke.createdAt = stroke.createdAt || Date.now();
+  stroke.endedAt = stroke.endedAt || Date.now();
+
   const existingIdx = room.strokes.findIndex(s => s.id === stroke.id);
   if (existingIdx >= 0) {
     room.strokes[existingIdx] = stroke;
   } else {
     room.strokes.push(stroke);
   }
-  saveRoomToKV(code, room.strokes);
+  saveRoomToKV(code, { strokes: room.strokes, activePage: room.activePage || 1 });
+  saveRoomsToDisk();
   io.to(code).emit('stroke-end', { strokeId: stroke.id, fullStroke: stroke });
   broadcastRoomToSSE(code);
-  res.json({ success: true, strokeCount: room.strokes.length });
+  res.json({ success: true, strokeCount: room.strokes.length, activePage: room.activePage || 1 });
 });
 
-// HTTP REST clear canvas
+// HTTP REST page change
+app.post('/api/room/:code/page', (req, res) => {
+  const code = sanitizeRoomCode(req.params.code);
+  const page = Math.max(1, Math.min(5, parseInt(req.body?.page, 10) || 1));
+  const { room } = getOrCreateRoom(code);
+  room.activePage = page;
+  saveRoomToKV(code, { strokes: room.strokes, activePage: page });
+  saveRoomsToDisk();
+  io.to(code).emit('page-changed', { page, byUser: req.body?.byUser || 'User' });
+  broadcastRoomToSSE(code);
+  res.json({ success: true, activePage: page });
+});
+
+// HTTP REST clear canvas (supports clearing only target page)
 app.post('/api/room/:code/clear', (req, res) => {
   const code = sanitizeRoomCode(req.params.code);
   const { room } = getOrCreateRoom(code);
-  room.strokes = [];
-  saveRoomToKV(code, []);
-  io.to(code).emit('canvas-cleared', { byUser: req.body?.byUser || 'User' });
+  const targetPage = req.body?.page ? parseInt(req.body.page, 10) : null;
+  if (targetPage) {
+    room.strokes = room.strokes.filter(s => (s.page || 1) !== targetPage);
+  } else {
+    room.strokes = [];
+  }
+  saveRoomToKV(code, { strokes: room.strokes, activePage: room.activePage || 1 });
+  saveRoomsToDisk();
+  io.to(code).emit('canvas-cleared', { byUser: req.body?.byUser || 'User', page: targetPage });
   broadcastRoomToSSE(code);
-  res.json({ success: true, cleared: true });
+  res.json({ success: true, cleared: true, page: targetPage });
 });
 
 // Real-Time Server-Sent Events (SSE) Stream for 24/7 background widget sync
@@ -123,7 +157,9 @@ app.get('/api/room/:code/live', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
+  res.write(': connected\n\n');
 
   if (!sseClients.has(code)) {
     sseClients.set(code, new Set());
@@ -131,9 +167,13 @@ app.get('/api/room/:code/live', (req, res) => {
   const set = sseClients.get(code);
   set.add(res);
 
-  // Send current room strokes immediately on connect
+  // Send current room strokes and activePage immediately on connect
   const room = rooms.get(code);
-  const initialData = JSON.stringify({ strokes: room ? room.strokes : [], userCount: room ? room.users.size : 1 });
+  const initialData = JSON.stringify({
+    strokes: room ? room.strokes : [],
+    activePage: room ? (room.activePage || 1) : 1,
+    userCount: room ? room.users.size : 1
+  });
   res.write(`data: ${initialData}\n\n`);
 
   // Heartbeat ping every 20s to keep connection open through cloud proxies
@@ -155,7 +195,11 @@ function broadcastRoomToSSE(roomCode) {
   const set = sseClients.get(roomCode);
   if (!set || set.size === 0) return;
   const room = rooms.get(roomCode);
-  const payload = JSON.stringify({ strokes: room ? room.strokes : [], userCount: room ? room.users.size : 1 });
+  const payload = JSON.stringify({
+    strokes: room ? room.strokes : [],
+    activePage: room ? (room.activePage || 1) : 1,
+    userCount: room ? room.users.size : 1
+  });
   const msg = `data: ${payload}\n\n`;
   for (const clientRes of set) {
     try {
@@ -181,9 +225,53 @@ const USER_COLORS = [
   '#ff9e00'  // Bright orange
 ];
 
+const fs = require('fs');
+const BACKUP_FILE = path.join(__dirname, 'rooms_backup.json');
+
 // In-memory room tracking
-// roomCode -> { users: Map(socketId => { id, name, color }), strokes: [] }
+// roomCode -> { users: Map(socketId => { id, name, color }), strokes: [], activePage: 1 }
 const rooms = new Map();
+
+function loadRoomsFromDisk() {
+  try {
+    if (fs.existsSync(BACKUP_FILE)) {
+      const raw = fs.readFileSync(BACKUP_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      for (const [code, roomObj] of Object.entries(data)) {
+        rooms.set(code, {
+          users: new Map(),
+          strokes: Array.isArray(roomObj.strokes) ? roomObj.strokes : [],
+          activePage: roomObj.activePage || 1
+        });
+      }
+      console.log(`[Persistence] Restored ${rooms.size} rooms from backup.`);
+    }
+  } catch (err) {
+    console.warn('[Persistence] Could not load backup:', err.message);
+  }
+}
+
+let saveBackupTimeout = null;
+function saveRoomsToDisk() {
+  clearTimeout(saveBackupTimeout);
+  saveBackupTimeout = setTimeout(() => {
+    try {
+      const data = {};
+      for (const [code, room] of rooms.entries()) {
+        data[code] = {
+          strokes: room.strokes,
+          activePage: room.activePage || 1
+        };
+      }
+      fs.writeFileSync(BACKUP_FILE, JSON.stringify(data, null, 2));
+    } catch (e) {
+      console.warn('[Persistence] Could not save backup:', e.message);
+    }
+  }, 400);
+}
+
+// Load persisted room data immediately on startup
+loadRoomsFromDisk();
 
 function getRandomColor() {
   return USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)];
@@ -204,28 +292,15 @@ function getOrCreateRoom(roomCode) {
   if (!rooms.has(code)) {
     rooms.set(code, {
       users: new Map(),
-      strokes: []
+      strokes: [],
+      activePage: 1
     });
   }
   return { code, room: rooms.get(code) };
 }
 
-// Periodically clean up expired strokes from server storage
-setInterval(() => {
-  const now = Date.now();
-  for (const [code, roomData] of rooms.entries()) {
-    // Keep only strokes that haven't fully expired yet
-    roomData.strokes = roomData.strokes.filter(stroke => {
-      const expirationTime = stroke.createdAt + (stroke.fadeDuration * 1000) + 2000; // 2s buffer
-      return now < expirationTime;
-    });
-
-    // Remove empty rooms after 1 hour of no users
-    if (roomData.users.size === 0 && roomData.strokes.length === 0) {
-      rooms.delete(code);
-    }
-  }
-}, 5000);
+// NOTE: Auto-expiration has been removed. Strokes across all 5 pages stay 100% permanent
+// and are only removed if the user explicitly clears the page with the Duster button.
 
 io.on('connection', (socket) => {
   let currentRoom = null;
@@ -267,25 +342,24 @@ io.on('connection', (socket) => {
     };
     room.users.set(socket.id, currentUser);
 
-    // Send the joiner their identity and active strokes that have not yet faded
+    // Send the joiner their identity, active page, and all permanent strokes
     const now = Date.now();
-    const activeStrokes = room.strokes.filter(s => {
-      return (now - s.createdAt) < (s.fadeDuration * 1000);
-    });
+    const activeStrokes = room.strokes;
 
     const responseData = {
       roomCode: code,
       user: currentUser,
       activeStrokes,
+      activePage: room.activePage || 1,
       serverTime: now,
       users: Array.from(room.users.values())
     };
 
     socket.emit('joined-room-success', responseData);
     if (typeof ack === 'function') {
-      ack({ success: true, roomCode: code });
+      ack({ success: true, roomCode: code, activePage: room.activePage || 1 });
     }
-    console.log(`[Socket] User ${currentUser.name} (${socket.id}) joined room "${code}"`);
+    console.log(`[Socket] User ${currentUser.name} (${socket.id}) joined room "${code}" (Page ${room.activePage || 1})`);
 
     // Notify other peers in room
     socket.to(code).emit('user-joined', {
@@ -301,9 +375,10 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoom);
     if (!room) return;
 
-    // Attach verified server timestamp and permanent lifespan
+    // Attach verified server timestamp, permanent lifespan, and page
     const fullStroke = {
       ...strokeData,
+      page: strokeData.page || room.activePage || 1,
       userId: socket.id,
       fadeDuration: 999999999,
       createdAt: strokeData.createdAt || Date.now()
@@ -344,9 +419,11 @@ io.on('connection', (socket) => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
     if (room && data && data.fullStroke) {
+      const strokePage = data.fullStroke.page || room.activePage || 1;
       const existingIndex = room.strokes.findIndex(s => s.id === data.strokeId);
       const strokeObj = {
         ...data.fullStroke,
+        page: strokePage,
         userId: socket.id,
         fadeDuration: 999999999,
         createdAt: data.fullStroke.createdAt || Date.now()
@@ -356,11 +433,31 @@ io.on('connection', (socket) => {
       } else {
         room.strokes.push(strokeObj);
       }
+      saveRoomToKV(currentRoom, { strokes: room.strokes, activePage: room.activePage || 1 });
+      saveRoomsToDisk();
     }
     if (data && data.fullStroke) {
       data.fullStroke.fadeDuration = 999999999;
+      if (!data.fullStroke.page && room) data.fullStroke.page = room.activePage || 1;
     }
     socket.to(currentRoom).emit('stroke-end', data);
+    broadcastRoomToSSE(currentRoom);
+  });
+
+  // Handle multi-page switching
+  socket.on('page-change', (data) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    const newPage = Math.max(1, Math.min(5, parseInt(data?.page, 10) || 1));
+    room.activePage = newPage;
+    saveRoomToKV(currentRoom, { strokes: room.strokes, activePage: newPage });
+    saveRoomsToDisk();
+    socket.to(currentRoom).emit('page-changed', {
+      page: newPage,
+      userId: socket.id,
+      userName: currentUser?.name
+    });
     broadcastRoomToSSE(currentRoom);
   });
 
@@ -376,15 +473,18 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Manual canvas clear
-  socket.on('clear-canvas', () => {
+  // Manual canvas clear (supports target page)
+  socket.on('clear-canvas', (data) => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
     if (room) {
-      room.strokes = [];
+      const targetPage = data?.page ? parseInt(data.page, 10) : (room.activePage || 1);
+      room.strokes = room.strokes.filter(s => (s.page || 1) !== targetPage);
+      saveRoomToKV(currentRoom, { strokes: room.strokes, activePage: room.activePage || 1 });
+      saveRoomsToDisk();
+      io.to(currentRoom).emit('canvas-cleared', { byUser: currentUser?.name, page: targetPage });
+      broadcastRoomToSSE(currentRoom);
     }
-    io.to(currentRoom).emit('canvas-cleared', { byUser: currentUser?.name });
-    broadcastRoomToSSE(currentRoom);
   });
 
   // Disconnect handler
