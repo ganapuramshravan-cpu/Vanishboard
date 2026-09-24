@@ -1,0 +1,242 @@
+[
+  {
+    "id": "dance",
+    "label": "Dancing ♪",
+    "file": "stickers/sticker_dance.png",
+    "gif": "stickers/sticker_dance.gif",
+    "width": 120,
+    "height": 146
+  },
+  {
+    "id": "panic",
+    "label": "Panic!",
+    "file": "stickers/sticker_panic.png",
+    "gif": "stickers/sticker_panic.gif",
+    "width": 146,
+    "height": 148
+  },
+  {
+    "id": "idunno",
+    "label": "I Dunno?",
+    "file": "stickers/sticker_idunno.png",
+    "gif": "stickers/sticker_idunno.gif",
+    "width": 147,
+    "height": 144
+  },
+  {
+    "id": "yay",
+    "label": "Yay! ★",
+    "file": "stickers/sticker_yay.png",
+    "gif": "stickers/sticker_yay.gif",
+    "width": 146,
+    "height": 149
+  },
+  {
+    "id": "boohoo",
+    "label": "Boo Hoo!",
+    "file": "stickers/sticker_boohoo.png",
+    "gif": "stickers/sticker_boohoo.gif",
+    "width": 115,
+    "height": 145
+  },
+  {
+    "id": "angry",
+    "label": "Angry!",
+    "file": "stickers/sticker_angry.png",
+    "gif": "stickers/sticker_angry.gif",
+    "width": 119,
+    "height": 163
+  },
+  {
+    "id": "omg",
+    "label": "OMG! ❗",
+    "file": "stickers/sticker_omg.png",
+    "gif": "stickers/sticker_omg.gif",
+    "width": 146,
+    "height": 163
+  },
+  {
+    "id": "haha",
+    "label": "Haha! 🤣",
+    "file": "stickers/sticker_haha.png",
+    "gif": "stickers/sticker_haha.gif",
+    "width": 147,
+    "height": 163
+  },
+  {
+    "id": "nooo",
+    "label": "Facepalm",
+    "file": "stickers/sticker_nooo.png",
+    "gif": "stickers/sticker_nooo.gif",
+    "width": 146,
+    "height": 163
+  },
+  {
+    "id": "sleep",
+    "label": "Sleeping zZ",
+    "file": "stickers/sticker_sleep.png",
+    "gif": "stickers/sticker_sleep.gif",
+    "width": 133,
+    "height": 158
+  },
+  {
+    "id": "eep",
+    "label": "Eep! 💦",
+    "file": "stickers/sticker_eep.png",
+    "gif": "stickers/sticker_eep.gif",
+    "width": 117,
+    "height": 164
+  },
+  {
+    "id": "thumbsup",
+    "label": "Yes! 👍",
+    "file": "stickers/sticker_thumbsup.png",
+    "gif": "stickers/sticker_thumbsup.gif",
+    "width": 146,
+    "height": 164
+  },
+  {
+    "id": "huh",
+    "label": "Huh? ❓",
+    "file": "stickers/sticker_huh.png",
+    "gif": "stickers/sticker_huh.gif",
+    "width": 147,
+    "height": 164
+  },
+  {
+    "id": "nom",
+    "label": "Nom Nom 🍔",
+    "file": "stickers/sticker_nom.png",
+    "gif": "stickers/sticker_nom.gif",
+    "width": 146,
+    "height": 158
+  },
+  {
+    "id": "wooo",
+    "label": "Wooo!",
+    "file": "stickers/sticker_wooo.png",
+    "gif": "stickers/sticker_wooo.gif",
+    "width": 137,
+    "height": 157
+  },
+  {
+    "id": "cheer",
+    "label": "Cheer! 📣",
+    "file": "stickers/sticker_cheer.png",
+    "gif": "stickers/sticker_cheer.gif",
+    "width": 129,
+    "height": 151
+  },
+  {
+    "id": "sigh",
+    "label": "Sigh 💨",
+    "file": "stickers/sticker_sigh.png",
+    "gif": "stickers/sticker_sigh.gif",
+    "width": 146,
+    "height": 163
+  },
+  {
+    "id": "oops",
+    "label": "Oops! 💥",
+    "file": "stickers/sticker_oops.png",
+    "gif": "stickers/sticker_oops.gif",
+    "width": 147,
+    "height": 163
+  },
+  {
+    "id": "scared",
+    "label": "Scared 😱",
+    "file": "stickers/sticker_scared.png",
+    "gif": "stickers/sticker_scared.gif",
+    "width": 146,
+    "height": 163
+  },
+  {
+    "id": "ugh",
+    "label": "Ugh! 💢",
+    "file": "stickers/sticker_ugh.png",
+    "gif": "stickers/sticker_ugh.gif",
+    "width": 137,
+    "height": 161
+  },
+  {
+    "id": "crying",
+    "label": "Crying 😭",
+    "file": "stickers/sticker_crying.png",
+    "gif": "stickers/sticker_crying.gif",
+    "width": 122,
+    "height": 163
+  },
+  {
+    "id": "groove",
+    "label": "Groove! 🕺",
+    "file": "stickers/sticker_groove.png",
+    "gif": "stickers/sticker_groove.gif",
+    "width": 146,
+    "height": 158
+  },
+  {
+    "id": "sad",
+    "label": "Sad 🌧️",
+    "file": "stickers/sticker_sad.png",
+    "gif": "stickers/sticker_sad.gif",
+    "width": 147,
+    "height": 161
+  },
+  {
+    "id": "wah",
+    "label": "Wah! 😲",
+    "file": "stickers/sticker_wah.png",
+    "gif": "stickers/sticker_wah.gif",
+    "width": 146,
+    "height": 158
+  },
+  {
+    "id": "strong",
+    "label": "Strong! 💪",
+    "file": "stickers/sticker_strong.png",
+    "gif": "stickers/sticker_strong.gif",
+    "width": 129,
+    "height": 160
+  },
+  {
+    "id": "shy",
+    "label": "Shy ☺️",
+    "file": "stickers/sticker_shy.png",
+    "gif": "stickers/sticker_shy.gif",
+    "width": 116,
+    "height": 147
+  },
+  {
+    "id": "love",
+    "label": "Love! ❤️",
+    "file": "stickers/sticker_love.png",
+    "gif": "stickers/sticker_love.gif",
+    "width": 116,
+    "height": 146
+  },
+  {
+    "id": "devil",
+    "label": "Devil 😈",
+    "file": "stickers/sticker_devil.png",
+    "gif": "stickers/sticker_devil.gif",
+    "width": 133,
+    "height": 138
+  },
+  {
+    "id": "running",
+    "label": "Running! 🏃",
+    "file": "stickers/sticker_running.png",
+    "gif": "stickers/sticker_running.gif",
+    "width": 133,
+    "height": 148
+  },
+  {
+    "id": "party",
+    "label": "Party! 🎉",
+    "file": "stickers/sticker_party.png",
+    "gif": "stickers/sticker_party.gif",
+    "width": 130,
+    "height": 151
+  }
+]
