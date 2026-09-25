@@ -58,6 +58,15 @@ async function getRoomFromKV(code) {
   return null;
 }
 
+function getUniqueUserCount(room) {
+  if (!room || !room.users) return 0;
+  const uniqueDevices = new Set();
+  for (const user of room.users.values()) {
+    uniqueDevices.add(user.deviceId || user.id);
+  }
+  return uniqueDevices.size;
+}
+
 // Health check endpoint for cloud uptime monitoring & pinging
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', platform: process.env.VERCEL ? 'vercel' : 'node', uptime: process.uptime(), timestamp: Date.now() });
@@ -70,10 +79,10 @@ app.get('/ping', (req, res) => {
 app.get('/api/room/:code', async (req, res) => {
   const code = sanitizeRoomCode(req.params.code);
   let room = rooms.get(code);
-  if (!room || room.strokes.length === 0) {
+  if (!room) {
     const kvData = await getRoomFromKV(code);
     if (kvData) {
-      if (!room) room = getOrCreateRoom(code).room;
+      room = getOrCreateRoom(code).room;
       if (Array.isArray(kvData.strokes)) room.strokes = kvData.strokes;
       if (kvData.activePage) room.activePage = kvData.activePage;
     }
@@ -85,7 +94,7 @@ app.get('/api/room/:code', async (req, res) => {
     roomCode: code,
     strokes: room.strokes,
     activePage: room.activePage || 1,
-    userCount: room.users.size,
+    userCount: getUniqueUserCount(room),
     timestamp: Date.now()
   });
 });
@@ -146,6 +155,20 @@ app.post('/api/room/:code/clear', (req, res) => {
   io.to(code).emit('canvas-cleared', { byUser: req.body?.byUser || 'User', page: targetPage });
   broadcastRoomToSSE(code);
   res.json({ success: true, cleared: true, page: targetPage });
+});
+
+// HTTP REST delete single stroke
+app.post('/api/room/:code/stroke/delete', (req, res) => {
+  const code = sanitizeRoomCode(req.params.code);
+  const strokeId = req.body?.strokeId;
+  if (!code || !strokeId) return res.status(400).json({ error: 'Missing params' });
+  const { room } = getOrCreateRoom(code);
+  room.strokes = room.strokes.filter(s => s.id !== strokeId);
+  saveRoomToKV(code, { strokes: room.strokes, activePage: room.activePage || 1 });
+  saveRoomsToDisk();
+  io.to(code).emit('stroke-deleted', { strokeId });
+  broadcastRoomToSSE(code);
+  res.json({ success: true, strokeId, remaining: room.strokes.length });
 });
 
 // Real-Time Server-Sent Events (SSE) Stream for 24/7 background widget sync
@@ -226,7 +249,7 @@ const USER_COLORS = [
 ];
 
 const fs = require('fs');
-const BACKUP_FILE = path.join(__dirname, 'rooms_backup.json');
+const BACKUP_FILE = process.env.VERCEL ? path.join('/tmp', 'rooms_backup.json') : path.join(__dirname, 'rooms_backup.json');
 
 // In-memory room tracking
 // roomCode -> { users: Map(socketId => { id, name, color }), strokes: [], activePage: 1 }
@@ -240,7 +263,7 @@ function loadRoomsFromDisk() {
       for (const [code, roomObj] of Object.entries(data)) {
         rooms.set(code, {
           users: new Map(),
-          strokes: Array.isArray(roomObj.strokes) ? roomObj.strokes : [],
+          strokes: Array.isArray(roomObj.strokes) ? roomObj.strokes.filter(s => s && s.mode !== 'eraser') : [],
           activePage: roomObj.activePage || 1
         });
       }
@@ -315,6 +338,7 @@ io.on('connection', (socket) => {
     }
     const cleanCode = String(payload.roomCode).toUpperCase().trim();
     const userName = payload.userName;
+    const deviceId = payload.deviceId || socket.id;
 
     // Leave any previous room
     if (currentRoom) {
@@ -322,11 +346,16 @@ io.on('connection', (socket) => {
       const prevRoomData = rooms.get(currentRoom);
       if (prevRoomData) {
         prevRoomData.users.delete(socket.id);
-        io.to(currentRoom).emit('user-left', {
-          socketId: socket.id,
-          remainingCount: prevRoomData.users.size,
-          users: Array.from(prevRoomData.users.values())
-        });
+        const uniqueCount = getUniqueUserCount(prevRoomData);
+        const hasOtherSocket = Array.from(prevRoomData.users.values()).some(u => u.deviceId === deviceId);
+        if (!hasOtherSocket) {
+          io.to(currentRoom).emit('user-left', {
+            socketId: socket.id,
+            userName: currentUser?.name,
+            remainingCount: uniqueCount,
+            users: Array.from(prevRoomData.users.values())
+          });
+        }
       }
     }
 
@@ -335,8 +364,24 @@ io.on('connection', (socket) => {
     currentRoom = code;
     socket.join(code);
 
+    // DEDUPLICATE: Check if this room already has an active socket from the same deviceId
+    let replacedExistingUser = false;
+    for (const [existingSocketId, existingUser] of room.users.entries()) {
+      if (existingUser.deviceId === deviceId && existingSocketId !== socket.id) {
+        console.log(`[Socket] Replacing dangling socket ${existingSocketId} for device ${deviceId}`);
+        const oldSocket = io.sockets.sockets.get(existingSocketId);
+        if (oldSocket) {
+          oldSocket.leave(code);
+          oldSocket.disconnect(true);
+        }
+        room.users.delete(existingSocketId);
+        replacedExistingUser = true;
+      }
+    }
+
     currentUser = {
       id: socket.id,
+      deviceId: deviceId,
       name: (userName && userName.trim()) || `Artist #${Math.floor(100 + Math.random() * 900)}`,
       color: getRandomColor()
     };
@@ -345,6 +390,7 @@ io.on('connection', (socket) => {
     // Send the joiner their identity, active page, and all permanent strokes
     const now = Date.now();
     const activeStrokes = room.strokes;
+    const uniqueCount = getUniqueUserCount(room);
 
     const responseData = {
       roomCode: code,
@@ -352,6 +398,7 @@ io.on('connection', (socket) => {
       activeStrokes,
       activePage: room.activePage || 1,
       serverTime: now,
+      totalCount: uniqueCount,
       users: Array.from(room.users.values())
     };
 
@@ -359,14 +406,20 @@ io.on('connection', (socket) => {
     if (typeof ack === 'function') {
       ack({ success: true, roomCode: code, activePage: room.activePage || 1 });
     }
-    console.log(`[Socket] User ${currentUser.name} (${socket.id}) joined room "${code}" (Page ${room.activePage || 1})`);
+    console.log(`[Socket] User ${currentUser.name} (${socket.id}, dev:${deviceId}) joined room "${code}" (Online: ${uniqueCount})`);
 
     // Notify other peers in room
-    socket.to(code).emit('user-joined', {
-      user: currentUser,
-      totalCount: room.users.size,
-      users: Array.from(room.users.values())
-    });
+    if (!replacedExistingUser) {
+      socket.to(code).emit('user-joined', {
+        user: currentUser,
+        totalCount: uniqueCount,
+        users: Array.from(room.users.values())
+      });
+    } else {
+      io.to(code).emit('user-count-updated', {
+        totalCount: uniqueCount
+      });
+    }
   });
 
   // Stroke initiation
@@ -487,18 +540,40 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Real-time single stroke deletion
+  socket.on('stroke-delete', (data) => {
+    if (!currentRoom || !data?.strokeId) return;
+    const room = rooms.get(currentRoom);
+    if (room) {
+      room.strokes = room.strokes.filter(s => s.id !== data.strokeId);
+      saveRoomToKV(currentRoom, { strokes: room.strokes, activePage: room.activePage || 1 });
+      saveRoomsToDisk();
+      socket.to(currentRoom).emit('stroke-deleted', { strokeId: data.strokeId });
+      broadcastRoomToSSE(currentRoom);
+    }
+  });
+
   // Disconnect handler
   socket.on('disconnect', () => {
     if (currentRoom) {
       const room = rooms.get(currentRoom);
       if (room) {
+        const userLeaving = room.users.get(socket.id);
         room.users.delete(socket.id);
-        socket.to(currentRoom).emit('user-left', {
-          socketId: socket.id,
-          userName: currentUser?.name,
-          remainingCount: room.users.size,
-          users: Array.from(room.users.values())
-        });
+        const uniqueCount = getUniqueUserCount(room);
+        const hasOtherSocket = userLeaving && Array.from(room.users.values()).some(u => u.deviceId === userLeaving.deviceId);
+        if (!hasOtherSocket) {
+          socket.to(currentRoom).emit('user-left', {
+            socketId: socket.id,
+            userName: userLeaving?.name || currentUser?.name,
+            remainingCount: uniqueCount,
+            users: Array.from(room.users.values())
+          });
+        } else {
+          io.to(currentRoom).emit('user-count-updated', {
+            totalCount: uniqueCount
+          });
+        }
       }
     }
   });
