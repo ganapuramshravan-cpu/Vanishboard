@@ -59,10 +59,22 @@ async function getRoomFromKV(code) {
 }
 
 function getUniqueUserCount(room) {
-  if (!room || !room.users) return 0;
+  if (!room) return 0;
   const uniqueDevices = new Set();
-  for (const user of room.users.values()) {
-    uniqueDevices.add(user.deviceId || user.id);
+  if (room.users) {
+    for (const user of room.users.values()) {
+      uniqueDevices.add(user.deviceId || user.id);
+    }
+  }
+  const now = Date.now();
+  if (Array.isArray(room.strokes)) {
+    for (const s of room.strokes) {
+      if (s && (s.type === 'presence' || String(s.id).startsWith('__presence__'))) {
+        if (s.deviceId && (now - (s.lastSeen || 0)) < 15000) {
+          uniqueDevices.add(s.deviceId);
+        }
+      }
+    }
   }
   return uniqueDevices.size;
 }
@@ -353,8 +365,7 @@ function sanitizeRoomCode(raw) {
   return String(raw)
     .toUpperCase()
     .trim()
-    .replace(/['"`]/g, '-')
-    .replace(/[–—_]/g, '-')
+    .replace(/[\s_–—]+/g, '-')
     .replace(/[^A-Z0-9-]/g, '');
 }
 
