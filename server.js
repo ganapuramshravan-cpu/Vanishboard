@@ -78,21 +78,31 @@ app.get('/ping', (req, res) => {
 // Dual-channel room sync API (HTTP Polling fallback & Vercel serverless support)
 app.get('/api/room/:code', async (req, res) => {
   const code = sanitizeRoomCode(req.params.code);
-  let room = rooms.get(code);
-  if (!room) {
+  const { room } = getOrCreateRoom(code);
+  try {
     const kvData = await getRoomFromKV(code);
     if (kvData) {
-      room = getOrCreateRoom(code).room;
-      if (Array.isArray(kvData.strokes)) room.strokes = kvData.strokes;
+      if (Array.isArray(kvData.strokes)) {
+        const localMap = new Map((room.strokes || []).map(s => [s.id, s]));
+        for (const s of kvData.strokes) {
+          if (!localMap.has(s.id)) {
+            room.strokes.push(s);
+            localMap.set(s.id, s);
+          }
+        }
+      }
+      if (Array.isArray(kvData.deletedStrokeIds)) {
+        room.deletedStrokeIds = Array.from(new Set([...(room.deletedStrokeIds || []), ...kvData.deletedStrokeIds]));
+      }
       if (kvData.activePage) room.activePage = kvData.activePage;
     }
-  }
-  if (!room) {
-    return res.json({ roomCode: code, strokes: [], activePage: 1, userCount: 0, timestamp: Date.now() });
-  }
+  } catch (e) {}
+
+  const deletedSet = new Set(room.deletedStrokeIds || []);
   res.json({
     roomCode: code,
-    strokes: room.strokes,
+    strokes: (room.strokes || []).filter(s => s && !deletedSet.has(s.id)),
+    deletedStrokeIds: room.deletedStrokeIds || [],
     activePage: room.activePage || 1,
     userCount: getUniqueUserCount(room),
     timestamp: Date.now()
@@ -100,13 +110,32 @@ app.get('/api/room/:code', async (req, res) => {
 });
 
 // HTTP REST stroke ingestion (100% reliable on Vercel Serverless)
-app.post('/api/room/:code/stroke', (req, res) => {
+app.post('/api/room/:code/stroke', async (req, res) => {
   const code = sanitizeRoomCode(req.params.code);
   const stroke = req.body;
   if (!code || !stroke || !stroke.id) {
     return res.status(400).json({ error: 'Invalid stroke data' });
   }
   const { room } = getOrCreateRoom(code);
+  try {
+    const kvData = await getRoomFromKV(code);
+    if (kvData && Array.isArray(kvData.strokes)) {
+      const existingIds = new Set(room.strokes.map(s => s.id));
+      for (const s of kvData.strokes) {
+        if (!existingIds.has(s.id)) {
+          room.strokes.push(s);
+          existingIds.add(s.id);
+        }
+      }
+      if (Array.isArray(kvData.deletedStrokeIds)) {
+        room.deletedStrokeIds = Array.from(new Set([...(room.deletedStrokeIds || []), ...kvData.deletedStrokeIds]));
+      }
+    }
+  } catch (e) {}
+
+  if (room.deletedStrokeIds && room.deletedStrokeIds.includes(stroke.id)) {
+    return res.json({ success: false, dropped: true, reason: 'Stroke was deleted' });
+  }
   if (!stroke.page) {
     stroke.page = room.activePage || 1;
   }
@@ -120,7 +149,7 @@ app.post('/api/room/:code/stroke', (req, res) => {
   } else {
     room.strokes.push(stroke);
   }
-  saveRoomToKV(code, { strokes: room.strokes, activePage: room.activePage || 1 });
+  saveRoomToKV(code, { strokes: room.strokes, deletedStrokeIds: room.deletedStrokeIds || [], activePage: room.activePage || 1 });
   saveRoomsToDisk();
   io.to(code).emit('stroke-end', { strokeId: stroke.id, fullStroke: stroke });
   broadcastRoomToSSE(code);
@@ -133,7 +162,7 @@ app.post('/api/room/:code/page', (req, res) => {
   const page = Math.max(1, Math.min(5, parseInt(req.body?.page, 10) || 1));
   const { room } = getOrCreateRoom(code);
   room.activePage = page;
-  saveRoomToKV(code, { strokes: room.strokes, activePage: page });
+  saveRoomToKV(code, { strokes: room.strokes, deletedStrokeIds: room.deletedStrokeIds || [], activePage: page });
   saveRoomsToDisk();
   io.to(code).emit('page-changed', { page, byUser: req.body?.byUser || 'User' });
   broadcastRoomToSSE(code);
@@ -145,12 +174,24 @@ app.post('/api/room/:code/clear', (req, res) => {
   const code = sanitizeRoomCode(req.params.code);
   const { room } = getOrCreateRoom(code);
   const targetPage = req.body?.page ? parseInt(req.body.page, 10) : null;
+  room.deletedStrokeIds = room.deletedStrokeIds || [];
   if (targetPage) {
+    room.strokes.forEach(s => {
+      if ((s.page || 1) === targetPage && !room.deletedStrokeIds.includes(s.id)) {
+        room.deletedStrokeIds.push(s.id);
+      }
+    });
     room.strokes = room.strokes.filter(s => (s.page || 1) !== targetPage);
   } else {
+    room.strokes.forEach(s => {
+      if (!room.deletedStrokeIds.includes(s.id)) room.deletedStrokeIds.push(s.id);
+    });
     room.strokes = [];
   }
-  saveRoomToKV(code, { strokes: room.strokes, activePage: room.activePage || 1 });
+  if (room.deletedStrokeIds.length > 2000) {
+    room.deletedStrokeIds = room.deletedStrokeIds.slice(-2000);
+  }
+  saveRoomToKV(code, { strokes: room.strokes, deletedStrokeIds: room.deletedStrokeIds, activePage: room.activePage || 1 });
   saveRoomsToDisk();
   io.to(code).emit('canvas-cleared', { byUser: req.body?.byUser || 'User', page: targetPage });
   broadcastRoomToSSE(code);
@@ -164,7 +205,12 @@ app.post('/api/room/:code/stroke/delete', (req, res) => {
   if (!code || !strokeId) return res.status(400).json({ error: 'Missing params' });
   const { room } = getOrCreateRoom(code);
   room.strokes = room.strokes.filter(s => s.id !== strokeId);
-  saveRoomToKV(code, { strokes: room.strokes, activePage: room.activePage || 1 });
+  room.deletedStrokeIds = room.deletedStrokeIds || [];
+  if (!room.deletedStrokeIds.includes(strokeId)) {
+    room.deletedStrokeIds.push(strokeId);
+    if (room.deletedStrokeIds.length > 2000) room.deletedStrokeIds.shift();
+  }
+  saveRoomToKV(code, { strokes: room.strokes, deletedStrokeIds: room.deletedStrokeIds, activePage: room.activePage || 1 });
   saveRoomsToDisk();
   io.to(code).emit('stroke-deleted', { strokeId });
   broadcastRoomToSSE(code);
@@ -264,6 +310,7 @@ function loadRoomsFromDisk() {
         rooms.set(code, {
           users: new Map(),
           strokes: Array.isArray(roomObj.strokes) ? roomObj.strokes.filter(s => s && s.mode !== 'eraser') : [],
+          deletedStrokeIds: Array.isArray(roomObj.deletedStrokeIds) ? roomObj.deletedStrokeIds : [],
           activePage: roomObj.activePage || 1
         });
       }
@@ -283,6 +330,7 @@ function saveRoomsToDisk() {
       for (const [code, room] of rooms.entries()) {
         data[code] = {
           strokes: room.strokes,
+          deletedStrokeIds: room.deletedStrokeIds || [],
           activePage: room.activePage || 1
         };
       }
@@ -316,10 +364,13 @@ function getOrCreateRoom(roomCode) {
     rooms.set(code, {
       users: new Map(),
       strokes: [],
+      deletedStrokeIds: [],
       activePage: 1
     });
   }
-  return { code, room: rooms.get(code) };
+  const r = rooms.get(code);
+  if (!r.deletedStrokeIds) r.deletedStrokeIds = [];
+  return { code, room: r };
 }
 
 // NOTE: Auto-expiration has been removed. Strokes across all 5 pages stay 100% permanent
@@ -389,13 +440,15 @@ io.on('connection', (socket) => {
 
     // Send the joiner their identity, active page, and all permanent strokes
     const now = Date.now();
-    const activeStrokes = room.strokes;
+    const deletedSet = new Set(room.deletedStrokeIds || []);
+    const activeStrokes = (room.strokes || []).filter(s => s && !deletedSet.has(s.id));
     const uniqueCount = getUniqueUserCount(room);
 
     const responseData = {
       roomCode: code,
       user: currentUser,
       activeStrokes,
+      deletedStrokeIds: room.deletedStrokeIds || [],
       activePage: room.activePage || 1,
       serverTime: now,
       totalCount: uniqueCount,
@@ -426,7 +479,10 @@ io.on('connection', (socket) => {
   socket.on('stroke-start', (strokeData) => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
-    if (!room) return;
+    if (!room || !strokeData || !strokeData.id) return;
+    if (room.deletedStrokeIds && room.deletedStrokeIds.includes(strokeData.id)) {
+      return;
+    }
 
     // Attach verified server timestamp, permanent lifespan, and page
     const fullStroke = {
@@ -448,9 +504,12 @@ io.on('connection', (socket) => {
 
   // Stroke point appending (streaming live as drawing happens)
   socket.on('stroke-point', (data) => {
-    if (!currentRoom) return;
+    if (!currentRoom || !data || !data.strokeId) return;
     const room = rooms.get(currentRoom);
     if (!room) return;
+    if (room.deletedStrokeIds && room.deletedStrokeIds.includes(data.strokeId)) {
+      return;
+    }
 
     // Append to server stroke history if exists
     const stroke = room.strokes.find(s => s.id === data.strokeId);
@@ -469,9 +528,13 @@ io.on('connection', (socket) => {
 
   // Stroke completed
   socket.on('stroke-end', (data) => {
-    if (!currentRoom) return;
+    if (!currentRoom || !data || !data.strokeId) return;
     const room = rooms.get(currentRoom);
-    if (room && data && data.fullStroke) {
+    if (!room) return;
+    if (room.deletedStrokeIds && room.deletedStrokeIds.includes(data.strokeId)) {
+      return;
+    }
+    if (data.fullStroke) {
       const strokePage = data.fullStroke.page || room.activePage || 1;
       const existingIndex = room.strokes.findIndex(s => s.id === data.strokeId);
       const strokeObj = {
@@ -486,10 +549,10 @@ io.on('connection', (socket) => {
       } else {
         room.strokes.push(strokeObj);
       }
-      saveRoomToKV(currentRoom, { strokes: room.strokes, activePage: room.activePage || 1 });
+      saveRoomToKV(currentRoom, { strokes: room.strokes, deletedStrokeIds: room.deletedStrokeIds || [], activePage: room.activePage || 1 });
       saveRoomsToDisk();
     }
-    if (data && data.fullStroke) {
+    if (data.fullStroke) {
       data.fullStroke.fadeDuration = 999999999;
       if (!data.fullStroke.page && room) data.fullStroke.page = room.activePage || 1;
     }
@@ -504,7 +567,7 @@ io.on('connection', (socket) => {
     if (!room) return;
     const newPage = Math.max(1, Math.min(5, parseInt(data?.page, 10) || 1));
     room.activePage = newPage;
-    saveRoomToKV(currentRoom, { strokes: room.strokes, activePage: newPage });
+    saveRoomToKV(currentRoom, { strokes: room.strokes, deletedStrokeIds: room.deletedStrokeIds || [], activePage: newPage });
     saveRoomsToDisk();
     socket.to(currentRoom).emit('page-changed', {
       page: newPage,
@@ -532,8 +595,17 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoom);
     if (room) {
       const targetPage = data?.page ? parseInt(data.page, 10) : (room.activePage || 1);
+      room.deletedStrokeIds = room.deletedStrokeIds || [];
+      room.strokes.forEach(s => {
+        if ((s.page || 1) === targetPage && !room.deletedStrokeIds.includes(s.id)) {
+          room.deletedStrokeIds.push(s.id);
+        }
+      });
       room.strokes = room.strokes.filter(s => (s.page || 1) !== targetPage);
-      saveRoomToKV(currentRoom, { strokes: room.strokes, activePage: room.activePage || 1 });
+      if (room.deletedStrokeIds.length > 2000) {
+        room.deletedStrokeIds = room.deletedStrokeIds.slice(-2000);
+      }
+      saveRoomToKV(currentRoom, { strokes: room.strokes, deletedStrokeIds: room.deletedStrokeIds, activePage: room.activePage || 1 });
       saveRoomsToDisk();
       io.to(currentRoom).emit('canvas-cleared', { byUser: currentUser?.name, page: targetPage });
       broadcastRoomToSSE(currentRoom);
@@ -546,7 +618,12 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoom);
     if (room) {
       room.strokes = room.strokes.filter(s => s.id !== data.strokeId);
-      saveRoomToKV(currentRoom, { strokes: room.strokes, activePage: room.activePage || 1 });
+      room.deletedStrokeIds = room.deletedStrokeIds || [];
+      if (!room.deletedStrokeIds.includes(data.strokeId)) {
+        room.deletedStrokeIds.push(data.strokeId);
+        if (room.deletedStrokeIds.length > 2000) room.deletedStrokeIds.shift();
+      }
+      saveRoomToKV(currentRoom, { strokes: room.strokes, deletedStrokeIds: room.deletedStrokeIds, activePage: room.activePage || 1 });
       saveRoomsToDisk();
       socket.to(currentRoom).emit('stroke-deleted', { strokeId: data.strokeId });
       broadcastRoomToSSE(currentRoom);
