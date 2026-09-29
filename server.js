@@ -117,6 +117,7 @@ app.get('/api/room/:code', async (req, res) => {
     deletedStrokeIds: room.deletedStrokeIds || [],
     activePage: room.activePage || 1,
     userCount: getUniqueUserCount(room),
+    users: Array.from(room.users.values()),
     timestamp: Date.now()
   });
 });
@@ -237,10 +238,12 @@ app.get('/api/room/:code/live', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Keep-Alive', 'timeout=60');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
   res.write(': connected\n\n');
+  if (typeof res.flush === 'function') res.flush();
 
   if (!sseClients.has(code)) {
     sseClients.set(code, new Set());
@@ -248,21 +251,25 @@ app.get('/api/room/:code/live', (req, res) => {
   const set = sseClients.get(code);
   set.add(res);
 
-  // Send current room strokes and activePage immediately on connect
+  // Send current room strokes, activePage, users, and count immediately on connect
   const room = rooms.get(code);
   const initialData = JSON.stringify({
     strokes: room ? room.strokes : [],
+    deletedStrokeIds: room ? (room.deletedStrokeIds || []) : [],
     activePage: room ? (room.activePage || 1) : 1,
-    userCount: room ? room.users.size : 1
+    userCount: room ? getUniqueUserCount(room) : 1,
+    users: room ? Array.from(room.users.values()) : []
   });
   res.write(`data: ${initialData}\n\n`);
+  if (typeof res.flush === 'function') res.flush();
 
-  // Heartbeat ping every 20s to keep connection open through cloud proxies
+  // Heartbeat ping every 8s to prevent mobile cellular carrier NAT routers from dropping the connection
   const pingInterval = setInterval(() => {
     try {
       res.write(': ping\n\n');
+      if (typeof res.flush === 'function') res.flush();
     } catch (e) {}
-  }, 20000);
+  }, 8000);
 
   req.on('close', () => {
     clearInterval(pingInterval);
@@ -278,13 +285,16 @@ function broadcastRoomToSSE(roomCode) {
   const room = rooms.get(roomCode);
   const payload = JSON.stringify({
     strokes: room ? room.strokes : [],
+    deletedStrokeIds: room ? (room.deletedStrokeIds || []) : [],
     activePage: room ? (room.activePage || 1) : 1,
-    userCount: room ? room.users.size : 1
+    userCount: room ? getUniqueUserCount(room) : 1,
+    users: room ? Array.from(room.users.values()) : []
   });
   const msg = `data: ${payload}\n\n`;
   for (const clientRes of set) {
     try {
       clientRes.write(msg);
+      if (typeof clientRes.flush === 'function') clientRes.flush();
     } catch (err) {
       set.delete(clientRes);
     }
@@ -659,10 +669,31 @@ io.on('connection', (socket) => {
           });
         } else {
           io.to(currentRoom).emit('user-count-updated', {
-            totalCount: uniqueCount
+            totalCount: uniqueCount,
+            users: Array.from(room.users.values())
           });
         }
       }
+    }
+  });
+
+  // Display name update handler
+  socket.on('update-username', (payload) => {
+    if (!currentRoom || !payload || !payload.name) return;
+    const cleanName = String(payload.name).trim().slice(0, 24);
+    if (!cleanName) return;
+    if (currentUser) {
+      currentUser.name = cleanName;
+    }
+    const room = rooms.get(currentRoom);
+    if (room && room.users.has(socket.id)) {
+      const u = room.users.get(socket.id);
+      u.name = cleanName;
+      room.users.set(socket.id, u);
+      io.to(currentRoom).emit('user-list-updated', {
+        users: Array.from(room.users.values()),
+        totalCount: getUniqueUserCount(room)
+      });
     }
   });
 });
