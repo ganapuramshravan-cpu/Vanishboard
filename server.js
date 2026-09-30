@@ -169,6 +169,36 @@ app.post('/api/room/:code/stroke', async (req, res) => {
   res.json({ success: true, strokeCount: room.strokes.length, activePage: room.activePage || 1 });
 });
 
+// Bulk HTTP REST stroke ingestion (self-healing & multi-stroke sync)
+app.post('/api/room/:code/strokes', async (req, res) => {
+  const code = sanitizeRoomCode(req.params.code);
+  const strokesList = req.body?.strokes;
+  if (!code || !Array.isArray(strokesList) || strokesList.length === 0) {
+    return res.status(400).json({ error: 'Invalid strokes list' });
+  }
+  const { room } = getOrCreateRoom(code);
+  const deletedSet = new Set(room.deletedStrokeIds || []);
+  const existingMap = new Map((room.strokes || []).map(s => [s.id, s]));
+
+  let added = false;
+  for (const s of strokesList) {
+    if (!s || !s.id || deletedSet.has(s.id)) continue;
+    s.fadeDuration = 999999999;
+    if (!existingMap.has(s.id)) {
+      room.strokes.push(s);
+      existingMap.set(s.id, s);
+      added = true;
+    }
+  }
+
+  if (added) {
+    saveRoomToKV(code, { strokes: room.strokes, deletedStrokeIds: room.deletedStrokeIds || [], activePage: room.activePage || 1 });
+    saveRoomsToDisk();
+    broadcastRoomToSSE(code);
+  }
+  res.json({ success: true, count: room.strokes.length });
+});
+
 // HTTP REST page change
 app.post('/api/room/:code/page', (req, res) => {
   const code = sanitizeRoomCode(req.params.code);
