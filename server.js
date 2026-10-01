@@ -115,6 +115,7 @@ app.get('/api/room/:code', async (req, res) => {
     roomCode: code,
     strokes: (room.strokes || []).filter(s => s && !deletedSet.has(s.id)),
     deletedStrokeIds: room.deletedStrokeIds || [],
+    pageClearedTimestamps: room.pageClearedTimestamps || {},
     activePage: room.activePage || 1,
     userCount: getUniqueUserCount(room),
     users: Array.from(room.users.values()),
@@ -283,9 +284,12 @@ app.get('/api/room/:code/live', (req, res) => {
 
   // Send current room strokes, activePage, users, and count immediately on connect
   const room = rooms.get(code);
+  const delSet = new Set(room ? (room.deletedStrokeIds || []) : []);
+  const validStrokes = (room && room.strokes) ? room.strokes.filter(s => s && !delSet.has(s.id)) : [];
   const initialData = JSON.stringify({
-    strokes: room ? room.strokes : [],
+    strokes: validStrokes,
     deletedStrokeIds: room ? (room.deletedStrokeIds || []) : [],
+    pageClearedTimestamps: room ? (room.pageClearedTimestamps || {}) : {},
     activePage: room ? (room.activePage || 1) : 1,
     userCount: room ? getUniqueUserCount(room) : 1,
     users: room ? Array.from(room.users.values()) : []
@@ -313,9 +317,12 @@ function broadcastRoomToSSE(roomCode) {
   const set = sseClients.get(roomCode);
   if (!set || set.size === 0) return;
   const room = rooms.get(roomCode);
+  const delSet = new Set(room ? (room.deletedStrokeIds || []) : []);
+  const validStrokes = (room && room.strokes) ? room.strokes.filter(s => s && !delSet.has(s.id)) : [];
   const payload = JSON.stringify({
-    strokes: room ? room.strokes : [],
+    strokes: validStrokes,
     deletedStrokeIds: room ? (room.deletedStrokeIds || []) : [],
+    pageClearedTimestamps: room ? (room.pageClearedTimestamps || {}) : {},
     activePage: room ? (room.activePage || 1) : 1,
     userCount: room ? getUniqueUserCount(room) : 1,
     users: room ? Array.from(room.users.values()) : []
